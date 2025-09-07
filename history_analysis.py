@@ -207,7 +207,13 @@ if run:
     - 其他股票僅顯示數據，屬於觀望或空頭，不建議操作
     """)
 
-    idx_df = fetch_index(period=period)
+    # 加入防呆，避免 yfinance RateLimitError
+    try:
+        idx_df = fetch_index(period=period)
+    except Exception as e:
+        st.warning(f"大盤資料取得失敗（可能被限制存取頻率），不影響個股分析。")
+        idx_df = None
+
     results = []
     for sym in all_symbols:
         df = fetch_history(sym, period=period, interval="1d")
@@ -218,7 +224,6 @@ if run:
             results.append(res)
             st.subheader(f"{sym} {tw_name_map.get(sym, '')}")
             st.write(res)
-            # 只顯示多頭的K線圖
             if res["方向"] == "多":
                 fig = plot_stock(sym, df, res)
                 st.plotly_chart(fig, use_container_width=True)
