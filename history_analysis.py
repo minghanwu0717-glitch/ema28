@@ -284,8 +284,4 @@ if not df_result_long.empty:
         st.text_area("複製分析結果（只顯示多頭）所有股票代碼", codes_str, height=100, key="codes_area")
 
         if st.button("複製到剪貼簿"):
-            try:
-                pyperclip.copy(codes_str)
-                st.success("已複製到剪貼簿！")
-            except Exception:
-                st.warning("複製失敗，請手動複製上方內容。")
+            st.info("請用 Ctrl+C 複製上方內容！")
