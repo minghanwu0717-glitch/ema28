@@ -7,6 +7,7 @@ import numpy as np
 import glob
 import chardet
 import io
+import pyperclip
 
 # ==== 15 分鐘乘數表（模擬用）====
 volume_multiplier_15m = {
@@ -135,17 +136,21 @@ def analyze(symbol: str, period="1mo", tw_name_map=None):
 
 def plot_stock(symbol, df, result):
     fig = go.Figure()
+    # X軸轉成字串日期
+    x_dates = df.index.strftime("%Y-%m-%d")
     fig.add_trace(go.Candlestick(
-        x=df.index,
+        x=x_dates,
         open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
-        name="K線"
+        name="K線",
+        increasing_line_color="red",   # 漲用紅色
+        decreasing_line_color="green"  # 跌用綠色
     ))
     fig.add_trace(go.Scatter(
-        x=df.index, y=df["Volume"], name="成交量", yaxis="y2", line=dict(color="orange")
+        x=x_dates, y=df["Volume"], name="成交量", yaxis="y2", line=dict(color="orange")
     ))
     if result["方向"] == "多":
         fig.add_trace(go.Scatter(
-            x=[df.index[-1]], y=[df["Close"].iloc[-1]],
+            x=[x_dates[-1]], y=[df["Close"].iloc[-1]],
             mode="markers", name="買入點",
             marker=dict(color="green", size=12, symbol="star")
         ))
@@ -154,6 +159,7 @@ def plot_stock(symbol, df, result):
         yaxis_title="股價",
         yaxis2=dict(title="成交量", overlaying="y", side="right", showgrid=False),
         xaxis_rangeslider_visible=False,
+        xaxis=dict(type="category", tickformat="%Y-%m-%d"),  # yyyy-mm-dd格式
         height=500
     )
     return fig
@@ -175,17 +181,21 @@ st.markdown("""
 > **提醒：目前營收資料僅涵蓋 6~8 月，每個月初請務必更新最新營收 csv，否則分析結果會落後！**
 """)
 
-period = st.selectbox("資料區間", ["1mo", "3mo", "6mo", "1y"], index=0)
-profit_rate = st.slider("停利(%)", min_value=0.02, max_value=0.06, value=0.03, step=0.01)
-loss_rate = st.slider("停損(%)", min_value=0.01, max_value=0.03, value=0.015, step=0.005)
+# 資料區間直接寫死
+period = "3mo"
 
-# 改成 radio 選擇股本篩選
+# 股本篩選加「所有公司」
 capital_filter = st.radio(
     "股本篩選",
-    ["大公司 (股本 ≥25 億)", "小公司 (股本 <25 億)"],
+    ["所有公司", "大公司 (股本 ≥25 億)", "小公司 (股本 <25 億)"],
     index=0
 )
-use_over25 = capital_filter == "大公司 (股本 ≥25 億)"
+if capital_filter == "所有公司":
+    use_over25 = None
+elif capital_filter == "大公司 (股本 ≥25 億)":
+    use_over25 = True
+else:
+    use_over25 = False
 
 run = st.button("開始掃描")
 
@@ -194,7 +204,14 @@ df_twse["symbol"] = df_twse["code"].astype(str) + ".TW"
 tw_name_map = dict(zip(df_twse["symbol"], df_twse["name"]))
 
 if run:
-    cap_df = load_capital(over25=use_over25)
+    # 股本篩選
+    if use_over25 is None:
+        cap_df = pd.concat([
+            load_capital(over25=True),
+            load_capital(over25=False)
+        ], ignore_index=True)
+    else:
+        cap_df = load_capital(over25=use_over25)
     rev_df = load_revenue_trend()
     good_list = set(cap_df["symbol"]) & set(rev_df["symbol"])
     all_symbols = list(good_list)
@@ -222,16 +239,32 @@ if run:
         res = analyze(sym, period=period, tw_name_map=tw_name_map)
         if res:
             results.append(res)
-            st.subheader(f"{sym} {tw_name_map.get(sym, '')}")
-            st.write(res)
-            if res["方向"] == "多":
-                fig = plot_stock(sym, df, res)
-                st.plotly_chart(fig, use_container_width=True)
 
     df_result = pd.DataFrame(results)
-    df_result_long = df_result[df_result["方向"] == "多"]  # 只顯示「多」
-    st.subheader("分析結果（只顯示多頭）")
-    st.dataframe(df_result_long, use_container_width=True)
+    df_result_long = df_result[df_result["方向"] == "多"]
+    st.session_state["df_result_long"] = df_result_long  # 保存到 session
+
+# 只顯示多頭表格
+df_result_long = st.session_state.get("df_result_long", pd.DataFrame())
+st.subheader("分析結果（只顯示多頭）")
+st.dataframe(df_result_long, use_container_width=True)
+
+# 股票互動選單
+if not df_result_long.empty:
+    stock_choices = df_result_long["股票"].tolist()
+    selected_stock = st.selectbox("點選股票顯示K線", stock_choices)
+    selected_symbol = selected_stock.split()[0]
+    df_selected = fetch_history(selected_symbol, period=period, interval="1d")
+    res_selected = analyze(selected_symbol, period=period, tw_name_map=tw_name_map)
+    if res_selected:
+        fig_selected = plot_stock(selected_symbol, df_selected, res_selected)
+        st.plotly_chart(fig_selected, use_container_width=True, key=f"{selected_symbol}_selected")
+
+    # 判斷資料日期
+    last_date = df_selected.index[-1]
+    today = pd.Timestamp("today").normalize().tz_localize(last_date.tz)
+    if last_date < today:
+        st.warning(f"最新資料日期：{last_date.date()}，今日可能為休市日或尚未更新。")
 
     if not df_result_long.empty:
         output = io.BytesIO()
@@ -244,3 +277,15 @@ if run:
             file_name="history_analysis_long.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+
+        # 新增：複製多頭股票代碼按鈕
+        codes = [s.split()[0] for s in df_result_long["股票"].tolist()]
+        codes_str = "\n".join(codes)
+        st.text_area("複製分析結果（只顯示多頭）所有股票代碼", codes_str, height=100, key="codes_area")
+
+        if st.button("複製到剪貼簿"):
+            try:
+                pyperclip.copy(codes_str)
+                st.success("已複製到剪貼簿！")
+            except Exception:
+                st.warning("複製失敗，請手動複製上方內容。")
