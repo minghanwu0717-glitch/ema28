@@ -7,7 +7,6 @@ import numpy as np
 import glob
 import chardet
 import io
-import pyperclip
 
 # ==== 15 分鐘乘數表（模擬用）====
 volume_multiplier_15m = {
